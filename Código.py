@@ -157,7 +157,6 @@ def abrir_tela_professor(usuario):
                                 state="readonly", width=largura_alunos)
     combo_alunos.pack(pady=5)
 
-    # --- O 'Entry' de RA foi removido ---
 
     tk.Label(janela, text="Nota NP1:").pack(pady=(10, 0))
     entry_nota1 = tk.Entry(janela, width=30)
