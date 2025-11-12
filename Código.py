@@ -4,6 +4,7 @@ import json
 import os
 import random
 import datetime
+import ctypes  
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(SCRIPT_DIR, "usuarios.json")
@@ -13,8 +14,32 @@ DB_FILE = os.path.join(SCRIPT_DIR, "usuarios.json")
 # -----------------------------
 ras_professores = ["202590001", "202590002"]
 
+# --- 2. Bloco de carregamento C ---
+lib_status = None
+try:
+    if os.name == 'nt':
+        lib_path = os.path.join(SCRIPT_DIR, "status.dll")
+        lib_status = ctypes.CDLL(lib_path)
+    else:
+        lib_path = os.path.join(SCRIPT_DIR, "libstatus.so")
+        lib_status = ctypes.CDLL(lib_path)
+        
+    if lib_status:
+        funcao_c = lib_status.calcular_status
+        funcao_c.argtypes = [ctypes.c_float, ctypes.c_int]
+        funcao_c.restype = ctypes.c_char_p
+        print("INFO: Biblioteca C (status.dll) carregada com sucesso.")
+
+except OSError as e:
+    print(f"AVISO: Não foi possível carregar a biblioteca C (status.dll). {e}")
+    print("O status do aluno será calculado pela lógica Python (fallback).")
+except Exception as e:
+    print(f"Ocorreu um erro inesperado ao carregar a biblioteca C: {e}")
+# -----------------------------------
+
+
 # -----------------------------
-# Janela principal (movida para o topo)
+# Janela principal
 # -----------------------------
 janela = tk.Tk()
 janela.geometry("1000x500")
@@ -29,11 +54,12 @@ janela.title("Sistema Acadêmico")
 def carregar_dados():
     if not os.path.exists(DB_FILE):
         return []
-    with open(DB_FILE, "r", encoding="utf-8") as f:
-        try:
+    # ('try...except' para caso o arquivo esteja vazio)
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-        except json.JSONDecodeError:
-            return []
+    except json.JSONDecodeError:
+        return []
 
 
 def salvar_dados(dados):
@@ -90,9 +116,9 @@ def limpar_janela():
     for widget in janela.winfo_children():
         widget.destroy()
 
-# ---
-# --- FUNÇÃO MODIFICADA
-# ---
+# --------------------------------
+#  TELA PROFESSOR 
+# --------------------------------
 
 
 def abrir_tela_professor(usuario):
@@ -134,7 +160,7 @@ def abrir_tela_professor(usuario):
               command=mostrar_materia).pack(pady=5)
     # --- Fim do campo de matéria ---
 
-    # --- CAMPO DE SELEÇÃO DE ALUNO (NOVO) ---
+    # --- CAMPO DE SELEÇÃO DE ALUNO  ---
     tk.Label(janela, text="Selecione o Aluno:").pack(pady=(10, 0))
 
     # Carrega dados para listar alunos
@@ -154,9 +180,8 @@ def abrir_tela_professor(usuario):
         largura_alunos = 30  # Padrão se não houver alunos
 
     combo_alunos = ttk.Combobox(janela, values=sorted(lista_alunos_formatada),
-                                state="readonly", width=largura_alunos)
+                                  state="readonly", width=largura_alunos)
     combo_alunos.pack(pady=5)
-
 
     tk.Label(janela, text="Nota NP1:").pack(pady=(10, 0))
     entry_nota1 = tk.Entry(janela, width=30)
@@ -170,7 +195,7 @@ def abrir_tela_professor(usuario):
     entry_faltas = tk.Entry(janela, width=30)
     entry_faltas.pack(pady=5)
 
-    # --- Função interna de registrar nota/falta (MODIFICADA) ---
+    # --- Função interna de registrar nota/falta  ---
 
     def registrar_nota_falta():
         # Pega o aluno pelo Combobox
@@ -195,7 +220,7 @@ def abrir_tela_professor(usuario):
                 "Erro", f"Erro ao processar seleção do aluno: {e}")
             return
 
-        # O resto da lógica de salvar continua igual
+        
         dados = carregar_dados()
         aluno_encontrado = False
         for user in dados:
@@ -224,10 +249,11 @@ def abrir_tela_professor(usuario):
     tk.Button(janela, text="Sair (Logout)",
               command=abrir_tela_login).pack(pady=5)
 # ---
-# --- FIM DA FUNÇÃO MODIFICADA
+# --- FIM DA FUNÇÃO 
 # ---
 
 
+# --- 3. FUNÇÃO 'abrir_tela_aluno' ---
 def abrir_tela_aluno(usuario):
     """Tela para aluno ver suas informações"""
     limpar_janela()
@@ -259,18 +285,32 @@ def abrir_tela_aluno(usuario):
             faltas = usuario.get(f"faltas_{mat}", "0")
 
             try:
-                media = (float(nota1) + float(nota2)) / 2
-                faltas_int = int(faltas)
-                if faltas_int > 15:
-                    situacao = "Reprovado (faltas)"
-                elif media >= 7:
-                    situacao = "Aprovado"
+                # --- Cálculos Python ---
+                media_f = (float(nota1) + float(nota2)) / 2
+                faltas_i = int(faltas)
+                media_str = f"{media_f:.1f}"
+
+                # --- Lógica de Situação (C ou Fallback Python) ---
+                if lib_status:
+                    # Se a DLL carregou, usa o C
+                    status_bytes = lib_status.calcular_status(media_f, faltas_i)
+                    situacao = status_bytes.decode('utf-8')
                 else:
-                    situacao = "Reprovado (nota)"
-                media_str = f"{media:.1f}"
+                    # Se a DLL falhou (fallback), usa o Python
+                    if faltas_i > 15:
+                        situacao = "Reprovado (faltas)"
+                    elif media_f >= 7:
+                        situacao = "Aprovado"
+                    else:
+                        situacao = "Reprovado (nota)"
+                # --- Fim da lógica de Situação ---
+
             except ValueError:
                 media_str = "-"
                 situacao = "Dados incompletos"
+            except Exception as e:
+                media_str = "-"
+                situacao = f"Erro ao calcular: {e}"
 
             tree.insert("", "end", values=(
                 mat, nota1, nota2, faltas, media_str, situacao))
@@ -280,11 +320,14 @@ def abrir_tela_aluno(usuario):
 
     tk.Button(janela, text="Sair (Logout)",
               command=abrir_tela_login).pack(pady=15)
+# --- FIM DA FUNÇÃO  ---
 
 
 def abrir_tela_login():
     """Tela de login RA + senha"""
     limpar_janela()
+    # (Adicionando geometria de volta para esta tela)
+    janela.geometry("1000x500") 
     janela.title("Sistema Acadêmico - Login")
 
     tk.Label(janela, text="Login").pack(pady=10)
@@ -304,8 +347,12 @@ def abrir_tela_login():
         sucesso, usuario = validar_login(ra, senha)
         if sucesso:
             if ra in ras_professores:
+                # (Ajusta geometria para tela do professor)
+                janela.geometry("1000x500") 
                 abrir_tela_professor(usuario)
             else:
+                # (Ajusta geometria para tela do aluno)
+                janela.geometry("1000x500") 
                 abrir_tela_aluno(usuario)
         else:
             messagebox.showerror("Erro", "RA ou senha incorretos.")
@@ -318,6 +365,8 @@ def abrir_tela_login():
 def abrir_tela_cadastro():
     """Tela de cadastro de aluno"""
     limpar_janela()
+    # (Adicionando geometria de volta para esta tela)
+    janela.geometry("1000x500")
     janela.title("Sistema Acadêmico - Cadastro")
 
     tk.Label(janela, text="Cadastro de Aluno").pack(pady=10)
